@@ -1,0 +1,2085 @@
+---
+title: |
+  | HarvardX Data Science
+  | Capstone Project II
+  | Surviving the Titanic
+author: "Guido D'Alessandro"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    keep_tex: yes
+    fig_height: 3
+    fig_width: 5
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    latex_engine: xelatex
+header-includes:
+geometry: margin=0.75in
+fontsize: 10pt
+urlcolor: blue
+---
+
+```{r global-r-options, setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+DBG_LEVEL_RLS <- 0 # Release
+DBG_LEVEL_FST <- 1 # FAST Training but NO print outs
+DBG_LEVEL_PRT <- 2 # FAST Training and print outs
+R___DEBUG <- DBG_LEVEL_RLS
+
+# Turn script warning off (markdown
+# handles its own in chunck options)
+saved_warn_level <- getOption("warn")
+if ( R___DEBUG == DBG_LEVEL_RLS )
+	options( warn = -1 )
+
+# Save the script start time
+start_time <- Sys.time()
+
+# Save the session information
+session_info <- sessionInfo()
+
+options(str=strOptions(vec.len = 1), width=80)
+options(repos=structure(c(CRAN="https://cran.mtu.edu/")))
+knitr::opts_chunk$set(fig.align="center", echo=FALSE, eval=TRUE, highlight=TRUE, 
+  message=FALSE, warning=FALSE, comment="", include=TRUE, tidy=TRUE, size="small", results="markup")
+```
+
+```{r libraries, include=FALSE}
+
+# Check if needed libraries are installed
+installed_packages <- rownames( installed.packages() )
+checkInstallPackage <- function(pckg) {
+  if ( !(pckg %in% installed_packages) ) {
+    install.packages(pckg)
+  }
+}
+	
+# dslabs
+checkInstallPackage("dslabs")
+checkInstallPackage("dslabs")
+
+# ggrepel
+checkInstallPackage("gbm")
+
+# ggrepel
+checkInstallPackage("ggrepel")
+
+# gridExtra
+checkInstallPackage("gridExtra")
+
+# kableExtra
+checkInstallPackage("kableExtra")
+
+# knitr
+checkInstallPackage("knitr")
+
+# lattice
+checkInstallPackage("lattice")
+
+# lubridate
+checkInstallPackage("lubridate")
+
+# MASS
+checkInstallPackage("MASS")
+
+# rpart
+checkInstallPackage("rpart")
+
+# stringr
+checkInstallPackage("stringr")
+
+# tidyverse
+checkInstallPackage("tidyverse")
+
+# tinytex
+if ( !("tinytex" %in% installed_packages) ) {
+  # Requires a set path or reboot
+  install.packages("tinytex")
+  tinytex::install_tinytex()
+}
+```
+
+```{r global-variables, include=FALSE}
+# Add Libraries
+library(tidyverse)
+
+# Save the script start time
+script_start <- proc.time()
+
+# Save the session information
+session_info <- sessionInfo()
+
+# Working directory
+raw_work_dir <- "~/titanic/"
+work_dir     <- normalizePath(raw_work_dir, winslash="/")
+
+local_data_dir <- normalizePath(paste(raw_work_dir, "data", sep=""),     winslash="/")
+local_csv_dir  <- normalizePath(paste(raw_work_dir, "data/csv", sep=""), winslash="/")
+local_rds_dir  <- normalizePath(paste(raw_work_dir, "data/rds", sep=""), winslash="/")
+
+local_rel_csv_dir  <- "./data/csv"
+local_rel_rds_dir  <- "./data/rds"
+
+# Used data files
+dataset_files_dataset <- c("data/train.rds", "data/test.rds")
+dataset_files_working <- c("data/train.rds", "data/test.rds", "data/control.rds", "data/submit.csv")
+train_set_ndx   <- 1
+test_set_ndx    <- 2
+control_set_ndx <- 3
+submit_set_ndx  <- 4
+
+
+# Kaggle Data description
+# From: https://www.kaggle.com/c/titanic/overview
+#   and https://www.kaggle.com/c/titanic/data 
+#
+kaggle_login_url <- "https://www.kaggle.com/account/login"
+
+kaggle_man_url   <- "https://www.kaggle.com/c/titanic/data"
+#kaggle_zip_url   <- "https://www.kaggle.com/c/3136/download-all"
+
+kaggle_train_url <- "https://www.kaggle.com/c/titanic/download/train.csv"
+kaggle_test_url  <- "https://www.kaggle.com/c/titanic/download/test.csv"
+
+known_surv_rate    <- 1502/2224
+
+kaggle_train_rows  <- 891
+kaggle_train_cols  <- 12
+kaggle_test_rows   <- 418
+kaggle_test_cols   <- 11
+
+kaggle_train_col_names <- c("PassengerId", "Survived", "Pclass", "Name",
+                            "Sex",         "Age",      "SibSp",  "Parch",
+                            "Ticket",      "Fare",     "Cabin",  "Embarked")
+
+kaggle_test_col_names <- c("PassengerId",  "Pclass",   "Name",    "Sex",
+                            "Age",         "SibSp",    "Parch",   "Ticket",
+							              "Fare",        "Cabin",    "Embarked")
+
+# Age group descriptions
+age_group_descripts  <- c("0-12 mos", "1-9 yrs",   "10-19 yrs", "20-29 yrs", "30-39 yrs",
+                          "40-49 yrs", "50-59 yrs", "60-69 yrs", "70-79 yrs", "80-89 yrs")
+
+# First 11 Fare group descriptions
+fare_group_descripts  <- c("$0-49", "$50-99",   "$100-149", "$150-199", "$200-249",
+                          "$250-299", "$300-349", "$350-399", "$400-449", "$450-499", "$500-549")
+
+# Floating precisions
+rnd_detail <- 4
+rnd_quick  <- 2
+```
+
+```{r global-functions, include=FALSE}
+
+# Check for RDS files w/o path hassle
+f_rdsFileExists <- function(file) {
+  
+  # Create a Windows full path name
+  f  <- paste(local_rds_dir, "/", file, sep="")
+  fp <- normalizePath(f, winslash="\\")
+  
+  return( file.exists(fp) )
+}
+
+
+# Check for CSV files w/o path hassle
+f_csvFileExists <- function(file) {
+  
+  # Create a Windows full path name
+  f  <- paste(local_csv_dir, "/", file, sep="")
+  fp <- normalizePath(f, winslash="\\")
+  
+  return( file.exists(fp) )
+}
+
+
+# Create sub-directory if not present
+# Check exists folder and create if not present
+f_checkCreatePath <- function(pd, sd)
+{
+  nd <- normalizePath(pd, winslash="/")
+	if ( !file.exists(sd) )
+	{
+		dir.create( file.path(nd, sd) )
+	}
+}
+
+
+# Create the data directories if needed
+f_CreateDataDir <- function() 
+{
+	# Save working directory
+	sd <- getwd()
+
+	# set wd with currwent working dir
+	wd <-normalizePath(raw_work_dir, winslash="\\")
+
+	# create sub-dir "data of wd if does not exists
+	f_checkCreatePath(wd, "data")
+	
+	dd <- normalizePath(local_data_dir, winslash="\\")
+	setwd(dd)
+
+	# create sub-dir "data of wd if does not exists
+	f_checkCreatePath(dd, "csv")
+
+	# create sub-dir "data of wd if does not exists
+	f_checkCreatePath(dd, "rds")
+	
+	setwd(sd)
+}
+
+
+# Save given file as RDS files w/o path hassle
+f_rdsSave <- function(tbl, file_name) {
+  
+  # Create a Windows full path name
+  f  <- paste(local_rds_dir, "/", file_name, sep="")
+  fp <- normalizePath(f, winslash="\\")
+  
+  saveRDS(tbl, file=fp)
+}
+
+
+# Read RDS file w/o path hassle
+f_rdsRead <- function(file) {
+  
+  # Create a Windows full path name
+  f  <- paste(local_rds_dir, "/", file, sep="")
+  fp <- normalizePath(f, winslash="\\")
+  
+  readRDS(fp)
+}
+
+
+# Read CVS file w/o path hassle
+f_csvRead <- function(file) {
+  
+  # Create a Windows full path name
+  f  <- paste(local_csv_dir, "/", file, sep="")
+  fp <- normalizePath(f, winslash="\\")
+  
+  read.csv(fp, sep=",", quote="\"")
+}
+
+
+f_prepEmptyTable <- function(tbl, filler) {
+
+	t <- tbl
+
+	lstr <- seq(nrow(t), 2)
+	lstc <- seq(ncol(t), 2)
+	track <- sapply(lstr, function(r) {
+		for (c in lstc) {
+			if ( !is.na(t[r, c]) & (t[r, c]!="") & ((t[r, c] == t[r-1, c]) & (t[r, 1] == t[r-1, 1])) ) {
+				t[r, c] <<- filler
+			}
+		}
+		if ( !is.na(t[r, 1]) & (t[r, 1]!="") & (t[r, 1] == t[r-1, 1]) ) {
+			t[r, 1] <<- filler
+		}
+		r
+	})
+	return( t )
+}
+
+
+#################################
+# Call this early to set project
+# directory structure and turn
+# script warning off
+#
+
+# Create data directories
+f_CreateDataDir()
+#
+```
+
+\newpage
+# Introduction {#introduction}
+
+As a choice for the *Choose Your Own (CYO)* Data Science Capstone project, I selected predicting surviving the R.M.S. Titanic (Royal Mail SHip Titanic) tragedy from [Kaggle](https://www.kaggle.com/c/titanic/overview) because it is considered to be a good [machine learning](https://en.wikipedia.org/wiki/Machine_learning) exercise, as well as a good prediction starting point for novice data scientists.
+ 
+The data exhibits a significant number of *NA* values and empty character strings that need to be replaced (or dealt with some way), many of the given columns require some type of conversion, classification, or mapping before they can be used as predictors—for example, cabin numbers need conversion to deck numbers, passenger ages need mapping to age groups, and so on. Because of the diversity of the work for data preparation, analysis, model setup and prediction, the exercise has an increased learning value appraised by many.
+
+In addition, the challenge carries a certain amount of appeal because it makes one wonder about the chances that one may have had, given one's own current socio-economic contitions, to survive such a disaster.
+
+[The data for this challenge comes in two *comma-separated values (CSV)* files:]{#datasets}
+
+- The training set (**train.csv**)
+- The testing set (**test.csv**)
+
+The *training set* consists of `r kaggle_train_rows` rows over `r kaggle_train_cols` columns of which 10 columns have the potential to be used as predictors. The remaining 2 columns serve other purposes. The *Passenger ID*  is used for passenger identification and table indexing, while the *Survived* column, which is the target of prediction, is included in this table for training purposes, and specifies if a given passenger survived (by a value of 1), or not (by a value of 0) the ship's sinking.
+
+In contrast to the *training set*, the *testing set* consists of `r kaggle_test_rows` rows over `r kaggle_test_cols` columns where the *Survived* column, the target of prediction, is explicitly left out.
+
+To summarize, the object of the challenge is to achieve the highest possible level of [accuracy](https://en.wikipedia.org/wiki/Accuracy_and_precision) ($Accuracy=\frac{CorrectPredictions}{TotalPredictions}$) in **predicting which of the \textit{testing set} passengers survived the ship's sinking**. When the results are submitted by a participant, Kaggle rates and rank the predictions according to the level of accuracy they reach and posts the result in the competition's [leaderboard](https://www.kaggle.com/c/titanic/leaderboard), which is periodically revolved. You can read the complete listing of the competition's rules [here](https://www.kaggle.com/c/titanic/rules). (^Note that Kaggle may require a Kaggle account and login before allowing you to view any of their competion pages.*)
+
+\newpage
+# Importing the Dataset
+
+As mentioned [above](#datasets), the data for this challenge comes in two *CSV* files, *train.csv* and *test.csv*, offered individually for download. The files can be manually dowloaded from Kaggle as a 34KB zipped folder called *titanic.zip*, from [here](https://www.kaggle.com/c/titanic/data). The individual files can also be downloaded manually from [here](https://www.kaggle.com/c/titanic/data), or directly from [here](https://www.kaggle.com/c/titanic/download/train.csv) for the *training set*, and [here](https://www.kaggle.com/c/titanic/download/test.csv) for the *testing set*.
+
+If the individual *CSV* file versions are chosen for download, they can be:
+
+- Downloaded manually from Kaggle to some local folder and read from R
+- Read remotely directly from R
+
+For the sake of simplicity, it would be normal to prefer reading the individual files remotely like this:
+```{r remote-read-files, echo=TRUE, highlight=TRUE}
+# Read URL files
+
+# Training dataset
+if ( !f_csvFileExists("train.csv") )
+  train_set <- read.csv(url(kaggle_train_url), sep=",", quote="\"")
+
+# Testing dataset
+if ( !f_csvFileExists("test.csv") )
+  test_set  <- read.csv(url(kaggle_test_url),  sep=",", quote="\"")
+```
+
+but in order to prevent site abuse, Kaggle requires a login for direct downloads, otherwise the download consists of an *HTML file moved notice page* demanding login. So, I decided to carry the manual downloads into the project's `r local_rel_csv_dir` directory.
+
+Once downloaded, I proceeded to load the files like this:
+```{r save-files, echo=TRUE}
+
+# For the training dataset
+if ( !f_rdsFileExists("train.rds") ) {
+  
+  # Read the CSV
+  train_set <- f_csvRead("train.csv")
+  
+  # Save as compact RDS
+  f_rdsSave(train_set, "train.rds")
+  
+} else {  # RDS Exists
+  
+  # Read the RDS
+  train_set <- f_rdsRead("train.rds")
+}
+
+# Do the same for the testing dataset
+if ( !f_rdsFileExists("test.rds") ) {
+  test_set <- f_csvRead("test.csv")
+  f_rdsSave(test_set, "test.rds")
+} else {
+  test_set <- f_rdsRead("test.rds")
+}
+```
+
+\newpage
+# Data Inspections
+
+Once loaded, the datasets should be inspected to verify that the have no errors, at the very least in structure and dimensions for the following:
+
+- Verify the number of rows and columns coincide with the dimensions described by Kaggle, which you can read [here](https://www.kaggle.com/c/titanic/data).
+- Verify the column names coincide with the descriptions posted by Kaggle.
+- Enumerate columns with missing values.
+- Enumerate duplicated rows.
+
+
+## Data Structure {#data-structure}
+
+The first step in this section is to print a description of the files we have loaded:
+```{r struct-inspections, echo=TRUE}
+
+# For the Training set
+str(train_set)
+
+# For the Testing set
+str(test_set)
+```
+
+Followed by verifying that the returned descriptions match with Kaggle’s:
+```{r check-dimensions, echo = TRUE}
+# Verify the read sets match the kaggle documented dimensions:
+
+# For training
+if ( kaggle_train_rows != nrow(train_set) |
+     kaggle_train_cols != ncol(train_set) ) {
+  noquote("The dimensions of the downloaded training file do not match Kaggle's....")
+  noquote("Aborting, repair this issue and try again")
+} else {
+  noquote( 
+    paste("Downloaded train file and Kaggle's file dimensions (", 
+          kaggle_train_rows, " rows x ", kaggle_train_cols, " columns) match!", sep=""))
+}
+
+# For testing
+if ( kaggle_test_rows != nrow(test_set) |
+     kaggle_test_cols != ncol(test_set) ) {
+  noquote("The dimensions of the downloaded testing file do not match Kaggle's....")
+  noquote("Aborting, repair this issue and try again")
+} else {
+  noquote( 
+    paste("Downloaded test file and Kaggle's file dimensions (",
+          kaggle_test_rows, " rows x ", kaggle_test_cols, " columns)match!", sep=""))
+}
+```
+
+That matches the advertized dimensions.
+
+
+## Column Names
+
+Yet another sanity check on the datasets, this time to verify the datasets column names match the ones described by Kaggle:
+```{r check-col-names, echo = TRUE}
+# Verify the column names in the read sets match the kaggle documented names
+
+# For training
+if ( sum(kaggle_train_col_names != colnames(train_set)) > 0 ) {
+  noquote("The column names of the downloaded test file do not match Kaggle's...")
+  noquote("Aborting, repair this issue and try again")
+} else {
+  noquote("Downloaded train file column names match Kaggle's!")
+}
+
+# For testing (if here, col_match still TRUE)
+if ( sum(kaggle_test_col_names != colnames(test_set)) > 0 ) {
+  noquote("The column names of the downloaded test file do not match Kaggle's...")
+  noquote("Aborting, repair this issue and try again")
+} else {
+  noquote("Downloaded test file column names match Kaggle's!")
+}
+```
+
+which also checks OK.
+
+*Note: you can find a reference to Kaggle's dataset description [here](https://www.kaggle.com/c/titanic/data), under "Data Dictionary" where some column names may not agree in order and case with the ones in the downloaded files and may also include spaces, however, it is easy to discern they refer to the same column. Finally, later on the page, under "Columns", you may scroll all the values of each column starting with the column's name. I Used this name to construct 2 global variables, **`r kaggle_train_col_names`** and **`r kaggle_test_col_names`**, which are the names you see in the code above*
+
+
+## Missing Values {#missing-values}
+
+Knowledge of missing values is particularly important because some of the columns suffering this condition may later prove to be strong predictors in the training area, where we may just simply exclude rows with missing values from training, or define a bucket value to class them if possible, but this could lead to some additional problems as well. However, it becomes even more problematic when the missing values exist in the test area because any replacement there could lead to disastrous results. In that case, we would either require finding a reasonable strategy and justification for replacement or, defer to use the predictor on rows with missing values. Therefore, the earlier we know about these conditions, the better to start planning the incorporation of these shortfalls early in the analysis and design of the models we will use. Both tables, train_set and test_set were checked for NA values like this:
+```{r check-na-values, echo=TRUE}
+
+# In training file
+train_na <- colnames(train_set)[colSums(is.na(train_set)) > 0]
+train_na
+
+# In testing file
+test_na <- colnames(test_set)[colSums(is.na(test_set)) > 0]
+test_na
+```
+
+As well like this for empty cells:
+```{r check-empty-values, echo=TRUE}
+# MAKE SURE NA.RM = TRUE
+# colSums return NA if found and na.rm = FALSE
+
+# For training file 
+train_em <- colnames(train_set)[colSums(train_set=="", na.rm=TRUE) > 0]
+train_em
+
+# In testing file
+test_em <- colnames(test_set)[colSums(test_set=="", na.rm=TRUE) > 0]
+test_em
+```
+
+In short, this is the summary of what we found:
+```{r missing-values-summary}
+library(dplyr)
+
+tbl <- data.frame(Table = "train_set", "NA" = train_na, Empty = train_em)
+tbl <- bind_rows(tbl, 
+       data.frame(Table = "_____",  "NA" = "",  Empty = ""))
+tbl <- bind_rows(tbl, 
+       data.frame(Table = "test_set",  "NA" = test_na,  Empty = test_em))
+
+tbl <- f_prepEmptyTable(tbl, "")
+tbl %>% knitr::kable()
+```  
+
+\begin{center}
+\textit{where we see that there are several missing value columns in both, the training and testing sets.}
+\end{center}
+
+
+## Duplicated Rows
+
+It is important to establish if there are duplicated rows, or more than one entry per PassengerId, in the data files because some of the analyses and computations that follow presume that. In that case, if necessary, we would be required to determine which of the duplicates to remove. 
+
+This is how we checked for the existence of duplicated rows:  
+```{r duplicated-rows, echo=TRUE}
+# train_set
+tr_dup <- nrow( train_set[duplicated(train_set["PassengerId"]),] )
+
+# test_set
+ts_dup <- nrow( test_set[duplicated(test_set["PassengerId"]),] )
+
+bind_rows(data.frame(Table="train_set", Duplicates=tr_dup),
+          data.frame(Table="train_set", Duplicates=ts_dup)) %>% 
+  knitr::kable(caption="Duplicated Rows")
+
+if ( tr_dup | ts_dup ) {
+  noquote("There are duplicates, a determination of row removal is needed.")
+} else {
+  noquote("There are no duplicates, so a determination of row removal is not needed.")
+}
+```
+
+Finally, we checked for cross-duplicated rows that is, for survival entries in the train dataset of a passenger whose fate is asked in the test dataset like this:
+```{r cross-duplication, echo=TRUE}
+tbl <- inner_join(test_set, train_set, by="PassengerId")
+nr <- nrow(tbl)
+noquote(
+  paste("There are ", nr, " passengers whose fate is known",
+        ifelse(nr>0,
+               "--these can be excluded from prediction.",
+               "--nothing left to do here."),  sep=""))
+```
+
+
+## Summary
+
+We wrap this section with a summary of the datasets:
+```{r data-summary}
+noquote("-- TRAINING DATASET SUMMARY:")
+# For the training dataset
+train_set %>% summary()
+noquote("-- TESTING DATASET SUMMARY:")
+# For the test dataset
+test_set %>% summary()
+```
+
+
+\newpage
+# Variable Analysis
+
+
+## Introduction {#surv-dependency}
+
+This section is dedicated to the investigation of the relationships between the target column, *Survived*, and all the other columns. In other words, we will be looking at the possible contributions of every $v_i$:
+\begin{itemize}
+  \item[] \textbf{Eq. 1:} ${Survived} = f(v_1, v_2, ..., v_n)+\varepsilon$
+\end{itemize}
+where $v_i$ are the different predictors or independent variables, or columns, yet to be discovered, $\varepsilon$, is the independent zero-centered residual explained by random variation.
+
+Of course other models are possible, for example:
+\begin{itemize}
+  \item[] \textbf{Eq. 2:} ${Survived} = f_i(v_i, ..., v_{ni})+\varepsilon_i$
+\end{itemize}
+where every $f_i()$ can include a prescribed number of variables from the data as needed, although their number can increase as a function of the number of missing values. **Eq. 1** would be the ideal, but there is always wrong with collected data--missing values, erroneous entris, and so on, imagine back then, during the early 1900's.
+
+Let us start by looking at the possible predictors individually and independently of each other to assess their importance to the model. After the selection of the most promising variables completes, we can move into testing the multivariate model in cross-validation.
+
+We will keep track of selected variables (or columns--if you prefer to think in terms of tables), as we go along, in a table summarizing the following information:
+
+\begin{itemize}
+  \item[] \textbf{Column:} The column names of the selected variables.
+  \item[] \textbf{Type:} The data type of the variable values (i.e. Number, Integer, etc.)
+  \item[] \textbf{Use As:} The data type of the variable values as will be used.
+  \item[] \textbf{Requires Work:} Yes or no.
+  \item[] \textbf{Work Type:} A one word description of the type of work needed (e.g. "Type Conversion", etc.).
+  \item[] \textbf{Work Description:} A short description of the work to be done (e.g. "To Number", etc.).
+\end{itemize}
+
+Please note that we have not decided how we are going to solve $f(v_1, v_2, ..., v_n)$. We will make this decision later after comparing different methods throughout the model building sections of this study.
+
+
+## Pclass {#analysis-pclass}
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as *"Ticket class"*, with the following key: *"1 = 1st, 2 = 2nd, 3 = 3rd"*
+
+The *Pclass* column is defined in the dataset as an integer, described by Kaggle to range from 1 through 3 ( [references here](https://www.kaggle.com/c/titanic/data) under *Data Description-->Data Dictionary* and under *Data Sources-->file-name-->Columns* ). In short, like this:
+```{r}
+data.frame(First=1, Second=2, Third=3) %>% knitr::kable(caption="Ticket Class Values")
+```
+
+we know there are no missing values in this column from the [missing values](#missing-values) section, so let us continue to inspect the data:
+```{r check-pclass-column}
+temp <- train_set %>%  
+  group_by(Pclass) %>% 
+  mutate(pc_avg=mean(Survived))
+
+first <- round(100*temp$pc_avg[temp$Pclass==1][1], 0)
+secnd <- round(100*temp$pc_avg[temp$Pclass==2][1], 0)
+third <- round(100*temp$pc_avg[temp$Pclass==3][1], 0)
+
+temp %>% 
+  ggplot(aes(Pclass, pc_avg)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(color="darkgray", size=0.5, method="glm") +
+  labs(x = "Ticket Class", y = "Survival Rate") +
+	ggtitle("Survival Rate  vs. Ticket Class")
+```
+
+Where a negative correlation is obvious. In numbers, we see that a passenger in first class had `r first`%chances of survival among all first class passengers, `r secnd`% in second among all second class passengers, and `r third`% in third among all third class passengers. Fair or not, we need to quantize this dependency by calculating the correlation coefficient like this:
+```{r pclass-correlation, echo=TRUE}
+noquote(
+  paste("Correlation =",
+        round(cor(x=temp$Pclass, y=temp$pc_avg), rnd_detail)))
+```
+
+Almost one. We are keeping this column as a predictor because of its high correlation coefficient, but keep in mind that these numbers reflect group probabilities, that is, the probability of survival among first class passengers, otherwise, those numbers would have looked like this:
+```{r overall-survival-by-class}
+nr = nrow(train_set)
+temp <- train_set %>%  
+  group_by(Pclass) %>% 
+  mutate(pc_avg = sum(Survived) / nr)
+
+first <- round(100*temp$pc_avg[temp$Pclass==1][1], 1)
+secnd <- round(100*temp$pc_avg[temp$Pclass==2][1], 1)
+third <- round(100*temp$pc_avg[temp$Pclass==3][1], 1)
+
+temp %>% 
+  ggplot(aes(Pclass, pc_avg)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(color="darkgray", size=0.5, method="glm") +
+  labs(x = "Ticket Class", y = "Survival Rate") +
+	ggtitle("Overall Survival Rate  vs. Ticket Class")
+
+noquote(
+  paste("Survival Rates: First=",first,"%, second=", secnd, "%, and third=", third, "%.", sep="" ))
+```
+
+Which were, at that time, the overall chances of survival for passengers traveling in those classes, that is `r first`% for those traveling in first class, and so on. Of course, we can also have a number of group-based models, each acting solely on their own group types to take advantage of the high correlations.
+
+Since we have decided to keep this column, we add it to our selection table:
+```{r select-table, echo=TRUE}
+sel_table <- data.frame(Column = "Pclass", Type = "Integer", "Use As" = "Factor", 
+                        "Req.Work" = "Y", "Work Type" = "TC", "Description" = "To factor", "Req Alt"="N")
+sel_table %>% knitr::kable(caption="Variable Analysis Table")
+```
+
+Since we are going to be carrying this table all the way to the data modification and model implementation sections of this report, I have taken the time to classify the types of operations that I forsee executing on the datasets.
+\begin{itemize}
+  \item[] \textit{Work Types:}
+  \begin{itemize}
+    \item[] \textit{Classification}: (CL) Conversion of integer or continuous values into groupable bins.
+    \item[] \textit{Data Separation}: (DS) Never executed, except for submission.
+    \item[] \textit{Model Separation}: (MS) Produce the same model but using a different number of variables working on the same datasets.
+    \item[] \textit{Numerical Transforms}: (NT) Scaling, raising to a power, etc.
+    \item[] \textit{Table Modifications}: (TM) Addition of trandformed columns only.
+    \item[] \textit{Type Conversions}: (TC) Conversion between types.
+    \item[] \textit{Values Exclussions}: (VE) Through model separation.
+  \end{itemize}
+\item[] \textit{Abbreviations:} \textit{(Other than the ones listed above)}
+  \begin{itemize}
+    \item[] \textit{Req.Alt}: Requires alternate model.
+    \item[] \textit{Req.Work}: Requires work.
+    \item[] \textit{Y}: Yes
+    \item[] \textit{N}: No
+  \end{itemize}
+\end{itemize}
+
+
+## Sex
+
+[Kaggle](https://www.kaggle.com/c/titanic/data) describes this column as *"Sex."* We saw earlier, in the [data structure](#data-structure) section of this study, that this column is a factor with two levels, "male" and "female," and (in the [missing values](#missing-values) section) that the data is complete, not missing any values, therefore I selected this column for further investigation.
+```{r check-sex-column}
+temp <- train_set %>%  
+  group_by(Sex) %>% 
+  mutate(sex_avg=mean(Survived))
+
+mp <- round(100*temp$sex_avg[temp$Sex =="male"  ][1], 0)
+fp <- round(100*temp$sex_avg[temp$Sex =="female"][1], 0)
+
+temp %>% 
+  ggplot(aes(Sex, sex_avg)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(Sex)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Passenger Sex", y = "Survival Rate") +
+	ggtitle("Survival Rate  vs. Passenger Sex")
+```
+
+The above graph shows a strong correlation between sex and survival rate. If you were male you had a `r mp`% change of survival among all males, and `r fp`% if you were female among all females, exhibiting a correlation coefficient of:
+```{r sex-correlation, echo=TRUE}
+noquote( 
+  paste("Correlation =", 
+        round(cor(x=as.integer(temp$Sex), y=temp$sex_avg), rnd_detail)))
+```
+
+Because of its high correlation coefficient, this is another variable that we will incorporate into our model. As with the ticket class variable calculations, these numbers reflect group probabilities, that is, the probability of a female surviving among females, for example. These probability numbers change when comparing the rates against the whole population to this:
+```{r overall-sex-survival}
+temp <- train_set %>%  
+  group_by(Sex) %>% 
+  mutate(sex_avg=sum(Survived)/nr)
+
+mp <- round(100*temp$sex_avg[temp$Sex =="male"  ][1], 0)
+fp <- round(100*temp$sex_avg[temp$Sex =="female"][1], 0)
+
+temp %>% 
+  ggplot(aes(Sex, sex_avg)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(Sex)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Passenger Sex", y = "Survival Rate") +
+	ggtitle("Overall Survival Rate  vs. Passenger Sex")
+
+noquote( 
+  paste("Correlation =", 
+        round(cor(x=as.integer(temp$Sex), y=temp$sex_avg), rnd_detail)))
+```
+
+Despite this, this variable continues to show a strong correlation, but survival rates are lower--`r fp`% for females and `r mp`% for males among all passengers, as expected.  Since we decided to incorporate this column into our model, we add it to our selection table like this:
+```{r add-sex-to-selection-table, echo=TRUE}
+sel_table <- bind_rows(sel_table, 
+              data.frame(Column = "Sex", Type = "Factor", "Use As" = "As is", 
+                         "Req Work"="N", "Work Type" = "", Description = "", "Req Alt"="N"))
+                     
+sel_table %>% knitr::kable(caption = "Updated Variable Analysis Table")
+```
+
+
+## Age {#age-analysis}
+
+[Kaggle](https://www.kaggle.com/c/titanic/data) describes this column as *"the age in years"* with the following footnote:
+\begin{itemize}
+  \item[] \textbf{age:} Age is fractional if less than 1. If the age is estimated, is it in the form of xx.5.
+\end{itemize}
+
+We know from the [missing values](#missing-values) section that there are several missing values in the *Age* column. We found NA's in both, the *train_set* and *test_set* tables.
+```{r check-age-column}
+tr_na <- nrow(train_set %>% filter( is.na(Age) ))
+tr_em <- nrow(train_set %>% filter( Age == "" ))
+ts_na <- nrow(test_set %>% filter( is.na(Age) ))
+ts_em <- nrow(test_set %>% filter( Age == "" ))
+data.frame("Train NA"=tr_na, "Train Empty"=tr_em, "Train Total"=tr_na+tr_em,
+           "Test NA"=ts_na, "Test Empty"=ts_em, "Test Total"=ts_na+ts_em) %>%
+  knitr::kable(caption="Age Missing Values")
+```
+
+Despite this, it might be worth the work incorporating this variable into our models just because it may have a great effect on survival when used in conjunction with the other variables.
+```{r age-grouping}
+temp <- train_set %>%  
+  filter( !is.na(Age) ) %>% 
+  mutate(age_group = as.factor( ifelse(Age<1, 0, floor(Age/10) + 1)) ) %>%
+  group_by(age_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+grps <- levels( temp$age_group )
+surv <- sapply(grps, function(group){
+  ndx <- as.integer(group) + 1
+  return( round( 100 * mean(temp$avg_rate[temp$age_group == grps[ndx]]), rnd_quick) )
+})
+
+data.frame("Age Group"=grps, Age=age_group_descripts, "Survival Rate"=surv, row.names=1:10) %>% knitr::kable(caption = "Age Groups in train_set")
+
+infants <- nrow( temp %>% filter(age_group == 0) )
+old     <- nrow( temp %>% filter(age_group == 8) )
+oldest  <- nrow( temp %>% filter(age_group == 9) )
+```
+
+Where all infants, `r infants`, and `r oldest` 8x-year-old, survived. There were some, `r old`, 70+-years-olds that did not survive. I will exclude group 0 from the computations and treat it as an independent class, and ignore groups 8 and 9 unless I find passengers within these age groups in the test dataset, in which case I would join the two groups to avoid ill-posed regressions.
+```{r grouping-age}
+temp %>% 
+  ggplot(aes(age_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(age_group)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Passenger Age Group", y = "Survival Rate") +
+	ggtitle("Survival vs. Passenger Age (All Groups)")
+
+temp2 <- train_set %>%  
+  filter( !is.na(Age) & Age>1 & Age < 70) %>% 
+  mutate(age_group = as.factor(ifelse(Age <= 1, 0, floor(Age/10) + 1))) %>%
+  group_by(age_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+temp2 %>% 
+  ggplot(aes(age_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(age_group)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Passenger Age Group", y = "Survival Rate") +
+	ggtitle("Survival vs. Passenger (1 < Age < 70)")
+
+temp3 <- train_set %>%  
+  filter( !is.na(Age) & Age > 1 ) %>% 
+  mutate(age_group = as.factor( ifelse(Age>=70, 4, floor(Age/20) + 1))) %>%
+  group_by(age_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+temp3 %>% 
+  ggplot(aes(age_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(age_group)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Passenger Age Group", y = "Survival Rate") +
+	ggtitle("Survival vs. Passenger Age (x20yrs)")
+
+noquote( 
+  paste("Correlation =", 
+        round(cor(x=as.integer(temp3$age_group), y=temp3$avg_rate), rnd_detail)))
+
+#noquote( 
+  #paste("Covariance =", 
+        #round(cov(x=as.integer(temp3$age_group), y=temp3$avg_rate), rnd_detail)))
+```
+The third graph and the displayed correlation coefficient above excludes the infant group and presents the results in groups of 20 years. I will incorporate this column into the model because I suspect it has a great influence in the outcome when acting together with other variables.
+
+Let us add it to our selection table:
+```{r}
+sel_table <- bind_rows(sel_table, 
+          data.frame(Column = "Age", Type = "Integer", "Use As" = "As is", 
+                     "Req Work"="Y", "Work Type" = "CL", "Description" = "To bins", "Req Alt"=""))
+sel_table <- bind_rows(sel_table, 
+          data.frame(Column = "", Type = "Integer", "Use As" = "As factor", 
+                     "Req Work"="Y", "Work Type" = "TC", "Description" = "To factor", "Req Alt"=""))
+sel_table <- bind_rows(sel_table, 
+          data.frame(Column = "", Type = "Factor", "Use As" = "As is", 
+                     "Req Work"="Y", "Work Type" = "VE", "Description" = "Exclude group", "Req Alt"="Y"))
+sel_table %>% knitr::kable(caption="Updated Variable Analysis Table")
+```
+
+
+## SibSp
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as *"the number of siblings/spouses aboard the Titanic"* with the following footnote:
+
+\begin{itemize}
+  \item[] \textbf{sibs}: The dataset defines family relations in this way...
+  \item[] Sibling = brother, sister, stepbrother, stepsister.
+  \item[] Spouse = husband, wife (mistresses and fiancés were ignored).
+\end{itemize}
+
+Kaggle's literature does not specify if the number in this column is a sum of all those relatives, though it should be safe to presume so because this is an integer type with no room for text representations with separators. Here a few listed entries:
+```{r table-with-random-siblings-spouse}
+set.seed(11, sample.kind = "Rounding")
+ndx <- caret::createDataPartition(y=train_set$PassengerId, times=1, p=0.01, list=FALSE)
+train_set[ndx, ] %>% dplyr::select(PassengerId, Name, SibSp) %>%
+  knitr::kable(caption="Random sample of rows to show SibSp values")
+```
+
+In addition, this column does not exhibit missing values. Let us check if it can have an influence on survival:
+```{r check-sibsp-column}
+temp <- train_set %>% 
+  mutate(ss_group = as.factor(SibSp)) %>%
+  group_by(ss_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+# Plot sipsp vs survival rate
+temp %>% 
+  ggplot(aes(ss_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(ss_group)), color="darkgray", size=0.5, method="glm") +
+  geom_smooth(aes(x=as.integer(ss_group)), color="#800000", size=0.25, method="gams") +
+  labs(x = "Number of Siblings/Spouse Aboard", y = "Survival Rate") +
+	ggtitle("Survival vs. Number of Siblings/Spouse")
+
+# Exclude passengers traveling alone
+temp2 <- train_set %>% 
+  filter(SibSp > 0) %>%
+  mutate(ss_group = as.factor(SibSp)) %>%
+  group_by(ss_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+# Plot accompanied passengers vs survival rate
+temp2 %>% 
+  ggplot(aes(ss_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(ss_group)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Number of Siblings/Spouse", y = "Survival Rate") +
+	ggtitle("Survival vs. SibSp Accompanied Passengers")
+
+noquote( 
+  paste("Correlation =", 
+        round(cor(x=as.integer(temp2$ss_group), y=temp2$avg_rate), rnd_detail)))
+```
+We see the trend after 1 sibling/spouse. It seems that passengers traveling alone were a class to themselves. If we incorporate this column into our model, I will separate group 0, passengers traveling alone, from the fitting algorithms. The second graph and the correlation coefficient above excludes it.
+
+We are selecting this column, so let us add it to our selection table:
+```{r add-sibsp-column-to-selection-table, echo=TRUE}
+sel_table <- bind_rows(sel_table, 
+          data.frame(Column = "SibSp", Type = "Integer", "Use As" = "As factor", 
+                     "Req Work"="Y", "Work Type" = "TC", "Description" = "To factor", "Req Alt"=""))
+sel_table <- bind_rows(sel_table, 
+          data.frame(Column = "", Type = "Factor", "Use As" = "As is", 
+                     "Req Work"="Y", "Work Type" = "VE", "Description" = "Exclude group", "Req Alt"="N"))
+sel_table %>% knitr::kable(caption="Updated Variable Analysis Table")
+```
+
+
+## Parch
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as the *"number of parents/children aboard the Titanic"* with the following footnote:
+
+\begin{itemize}
+  \item[] \textbf{parch:} The dataset defines family relations in this way...
+  \item[] Parent = mother, father.
+  \item[] Child = daughter, son, stepdaughter, stepson.
+  \item[] Some children travelled only with a nanny, therefore parch=0 for them.
+\end{itemize}
+
+Again, Kaggle's literature does not specify if the number in this column is a sum of all those relatives (parents and children), though it should be safe to presume so because this is an integer typed column with no room for text representations with separators. Let us see how this column can contribute to our model:
+```{r check-paren-children-column}
+temp <- train_set %>% 
+  mutate(pch_group = as.factor(Parch)) %>%
+  group_by(pch_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+temp %>% 
+  ggplot(aes(pch_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(pch_group)), color="darkgray", size=0.5, method="glm") +
+  geom_smooth(aes(x=as.integer(pch_group)), color="#800000", size=0.25) +
+  labs(x = "Number of Parents/Children Aboard", y = "Survival Rate") +
+	ggtitle("Survival vs. Number of Parent/Children")
+
+# Exclude passengers traveling alone
+temp2 <- train_set %>% 
+  filter(Parch > 0) %>%
+  mutate(pch_group = as.factor(Parch)) %>%
+  group_by(pch_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+temp2 %>% 
+  ggplot(aes(pch_group, avg_rate)) + 
+  geom_point(color="#5050ff", size=1, shape=15)+
+  geom_smooth(aes(x=as.integer(pch_group)), color="darkgray", size=0.5, method="glm") +
+  labs(x = "Number of Parents/Children Aboard", y = "Survival Rate") +
+	ggtitle("Survival vs. Parch Accompanied Passengers Only")
+
+noquote( 
+  paste("Correlation =", 
+        round(cor(x=as.integer(temp2$Pclass), y=temp2$avg_rate), rnd_detail)))
+```
+
+These are mixing results, because the survival rates here are somehow inter-related with the *Age* column findings, that is for example, if you have a count of 2 in this column, it means that you are likely traveling with either 2 parents, so most likely you are a child, or 1 parent and 1 child, so you must of child-bearing age or older. I will keep this colunm as a predictor because it might be supportive in the multivariate model described in the [survival dependencies](#surv-dependency) section, especially in instances when the *Age* column is missing values. Lets see if there is a cross relationship with *Age*:
+```{r parent-children-vs-age}
+train_set %>%  
+  filter( !is.na(Age) ) %>% 
+  mutate(pch_group = as.factor(Parch), age_group = as.factor(ifelse(Age < 1, 0, floor(Age/10) + 1))) %>%
+  group_by(pch_group)%>% 
+  mutate(grp_count = n()) %>%
+  ggplot(aes(pch_group, Age, fill=grp_count, color="khaki"))+ 
+  geom_boxplot(outlier.colour = "#404040")+
+  guides(color=FALSE)+
+  labs(x = "Number of Parents/Children Aboard", y = "Age", fill = "Group Count\n(Passengers)")+
+	ggtitle("Number of Parents/Children vs. Age")
+```
+
+Not much structure to make sense of. However, we will keep it just because it may serve to provide some useful information for prediction in the multivariate model [described earlier](#surv-dependency):
+```{r adding-parch-to-selection, echo=TRUE}
+sel_table <- bind_rows(sel_table, 
+  data.frame(Column = "Parch", Type = "Integer", "Use As" = "As factor",
+             "Req.Work" = "", "Work Type" = "TC", "Description" = "To factor", "Req Alt"=""))
+sel_table <- bind_rows(sel_table, 
+  data.frame(Column = "", Type = "Factor", "Use As" = "As is",
+             "Req.Work" = "", "Work Type" = "VE", "Description" = "Exclude group", "Req Alt"="N"))
+sel_table %>% knitr::kable(caption="Updated Variable Analysis Table")
+```
+
+
+## Ticket
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as *"Ticket number"*. It has no missing values, but I think there will be little dependency of survival on this, except that low ticket numbers may imply early embarkation, which could have made some passangers better acquiented with the crew in charge of filling the safe-boats during sinking, which may have increased the odds of survival. Let's see.
+```{r check-ticket-number}
+temp <- train_set %>% 
+  mutate(tk_group = as.factor(Ticket)) %>%
+  group_by(tk_group) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+temp %>% 
+  ggplot(aes(tk_group, avg_rate)) + 
+  geom_point(color="lightgray", size=1, shape=0)+
+  geom_smooth(aes(x=as.integer(tk_group)), color="darkred", size=0.5, method="glm") +
+  labs(x = "Ticket Number", y = "Survival Rate") +
+	ggtitle("Survival vs. Ticket Number")
+```
+
+So there seems to be a negative correlation, comfirming my suspitions. However, I will not use this column in our model, particularly because I believe that all the information contributed to survival from the tickret number is implicitly conveyed by the contribution of the *Embarked* column, which we will examine later.
+
+
+## Fare {#fare-analysis}
+
+```{r missing-fare-rows}
+# Count missing value rows in test area
+mv <- test_set %>% 
+  filter( is.na(Fare) ) %>% nrow()
+```
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as *"Passenger fare"*. From our [missing values](#missing-values) section, we know this column contains a missing value, `r mv` row(s).  However it might be worth looking at the effect of this variable on the survival rate. So let us take a quick look at that:
+```{r checking-fare-vs-survival}
+# Count missing value rows in test area
+mv <- test_set %>% 
+  filter( is.na(Fare) ) %>% nrow()
+
+temp <- train_set %>% 
+  filter( !is.na(Fare) )
+
+avg_fare <- mean( temp$Fare )
+
+less_pct <- round(100 * nrow(temp %>% filter(Fare < avg_fare ))/nrow(temp), rnd_quick)
+
+temp %>% 
+  ggplot(aes(Fare, fill=as.factor(Pclass))) + 
+  geom_histogram(binwidth=10)+
+  geom_vline(xintercept=avg_fare, color="darkred") +
+  labs(x = "Fare", y = "Count", fill = "Ticket Class") +
+	ggtitle("Count vs. Fare and Ticket Class")
+
+temp %>% 
+  ggplot(aes(Fare)) + 
+  geom_histogram(binwidth=10, aes(fill=..count..)) +
+  geom_vline(xintercept=35, color="darkred") +
+  labs(x = "Fare", y = "Count", fill = "Fare No. Payers") +
+	ggtitle("Count vs. Fare and Count")
+```
+
+Notice that the majority of passengers paid an average of \$`r round(avg_fare, rnd_quick)` (dark-red vertical line) for their tickets, while others (very few of them) paid more than \$500.00. Also, notice that the lowest fares correspond to third class in their majority and the highest ones to first class in their entirety. In the second graph we can see that `r less_pct`% of the passengers paid less than average (dark-red vertical line).
+
+Now let us examine the impact of fares, when binned, say in increments of $10.00, to compute their associated survival rates like this:
+```{r grouping-fare-in-10dollar-increments}
+temp <- train_set %>% 
+  filter( !is.na(Fare) ) %>%
+  mutate(fare_group = as.factor( floor(Fare/10) )) %>%
+  group_by(fare_group) %>%
+  mutate(avg_rate=mean(Survived), fare_count=n())
+
+temp %>% 
+  ggplot(aes(as.integer(fare_group), avg_rate)) + 
+  geom_point(color="darkgray", size=1, shape=15)+
+  geom_smooth(color="darkred", size=0.5, method="glm") +
+  #geom_smooth(color="darkblue", size=0.5) +
+  labs(x = "Fare", y = "Survival Rate") +
+	ggtitle("Survival Rate vs. Fare")
+
+# Number of Fare missing values in the test dataset
+fare_mv <- nrow( test_set %>% filter( is.na(Fare) ) %>% 
+  dplyr::select(PassengerId, Pclass, Name, Fare) )
+noquote(paste("Missing Fare values in the test dataset =", fare_mv))
+```
+
+Even though the error from the generalized least square regression fit appears at sight comparatively large and considering that the contribution of this column may be implicitly provided by the Pclass column, we will keep this column in spite its missing values in the training set, for it may contribute in the final prediction, at the very least in predicting those instances where there are `r fare_mv` missing values in the test set.
+```{r}
+# Add this column and the work to be done in the selection table
+sel_table <- bind_rows(sel_table, 
+  data.frame(Column = "Fare", Type = "Number", "Use As" = "As is", 
+    "Req.Work" = "", "Work Type" = "CL", "Description" = "To bins", "Req Alt"=""))
+sel_table <- bind_rows(sel_table, 
+  data.frame(Column = "", Type = "", "Use As" = "As factor", 
+    "Req.Work" = "", "Work Type" = "TC", "Description" = "To factor", "Req Alt"="Y"))
+sel_table %>% knitr::kable(caption="Updated Variable Analysis Table")
+```
+
+
+## Cabin
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as *"Cabin number"*. It has many missing values in both the training and testing datasets, which we count like this:
+```{r checking-empty-cabin-columns, echo=TRUE}
+# For Training set, count missing values in Cabin column
+tmp1 <- train_set %>% filter( is.na(Cabin) | Cabin == "" )
+mv1 <- nrow(tmp1)
+noquote(paste("Train set missing values in Cabin column =", mv1))
+
+# For testing set, count missing values in Cabin column
+tmp2 <- test_set  %>% filter( is.na(Cabin) | Cabin == "" )
+mv2 <- nrow(tmp2)
+noquote(paste("Test set missing values in Cabin column =", mv2))
+```
+
+There are `r mv1` missing values in the Cabin column, that leaves `r (nrow(train_set) - mv1)/nrow(train_set)`% usable columns for training to contribute in the prediction of `r (nrow(test_set) - mv2)/nrow(test_set)`% of the test rows. The contribution that this column could have provided to the model is greatly reduced because this fact. In addition, there are another number of entries that consist of multiple cabin numbers, sometimes across different decks, which could make it  difficult to extract valuable model fitting information, as we can see here:
+```{r sample-cabin-values}
+# For Training set, sample Cabin values
+tmp1 <- train_set %>% 
+  filter( !is.na(Cabin) & Cabin != "" & str_length(toString(Cabin)) > 4 )
+tmp1 %>% dplyr::select(PassengerId, Name, Cabin) %>%
+  head(n=10) %>% knitr::kable(caption="Train set: Sample Cabin Values")
+
+# For testing set, sample Cabin values
+tmp2 <- test_set %>% filter( !is.na(Cabin) & Cabin != "" & str_length(toString(Cabin)) > 4 )
+tmp2 %>% dplyr::select(PassengerId, Name, Cabin) %>%
+  head(n=10) %>% knitr::kable(caption="Test set: Sample Cabin Values")
+```
+
+There is also the possibility that deck number information is implicitly included in the ticket class if we consider that ship passenger classes are usually placed in distinct deck levels, where the lower the class the deeper the level. I will not include this column in the prediction models.
+
+
+## Embarked
+
+This column is described by [Kaggle](https://www.kaggle.com/c/titanic/data) as *"Port of Embarkation"*with the following comment (key):
+
+\begin{itemize}
+  \item[] C = Cherbourg, Q = Queenstown, S = Southamton.
+\end{itemize}
+
+It shows in the datasets as a factor with 4 levels--the three already mentioned in Kaggle's description plus one for missing values in the training dataset, as we were able to verify in the [missing values section](#missing-values) of this study. The number of missing entries in the training set is computed like this:
+```{r checking-embarked-missing-values}
+temp <- train_set %>% 
+  filter( is.na(Embarked) | Embarked == "" )
+mv <- nrow(temp)
+noquote(paste("Embarked Column Missing Values in Training Set =", mv))
+```
+
+where there are only `r mv` missing value entries in the *Embarked* column of the training dataset, a number I can live with. To check for dependencies of our model in this variable, let us do our usual plots:
+```{r plotting-embarkment-vs-survival}
+temp <- train_set %>% 
+  filter( !is.na(Embarked) & Embarked != "" ) %>%
+  mutate( em_no = ifelse(Embarked=='C', 1, ifelse(Embarked=='Q',2,3)) ) %>%
+  group_by( em_no ) %>% 
+  mutate( avg_rate=mean(Survived) )
+
+temp %>% 
+  ggplot(aes(em_no, avg_rate)) + 
+  geom_point(color="darkgray", size=1, shape=15)+
+  geom_smooth(size=0.5, method="glm") +
+  labs(x = "Embarkation Port", y = "Survival Rate") +
+	ggtitle("Survival vs. Embarkation Port")
+```
+
+Which confirms my suspicions on the effect of the order of port stops in the survival rate because earlier boarding passengers had the more time to acquaint with the crew that later loaded the safe-boats. Also,  we can presume that a good number of crew members and initial passengers were native to the originating port. I am including this column in the model and therefore add the column to the selection table:
+```{r adding-embarkment-to-selection}
+# Add this column and the work to be done in the selection table
+sel_table <- bind_rows(sel_table, 
+  data.frame(Column = "Embarked", Type = "Factor", "Use As" = "As is", 
+    "Req.Work" = "N", "Work Type" = "", "Description" = "", "Req Alt"="Y"))
+sel_table %>% knitr::kable(caption="Updated Variable Analysis Table")
+```
+
+
+## Summary {#analysis-results}
+
+We spent the last few sections of this study examining all the variables that came with the datasets, deciding whether or not to include them for prediction and in that case, whether or not to used them as found or required additional work before use. We also kept track of our findings in the selection table, whose final version we show here:
+```{r print-selection}
+sel_table %>% knitr::kable(caption="Final Variable Analysis Table Results")
+```
+
+Not that this list represents the final word in the composition of our model, but that it serves as a good starting point from which to carry testing and cross-validations against the data. It is possible that through this process we decide to add (or drop) a column from the model (or maybe even change the format in which it is used). With a list like this at hand, however, the work becomes comprehensible, manageable, and straight forward.
+
+\newpage
+# Data Modifications
+
+
+## Introduction
+
+The truth is that other than adding additional columns to the tables to hold transformed values we are not going to changethe data as provided by Kaggle.
+
+This section will be devoted to the pruduction of those extra columns, as described by the section table we have been carrying along.
+
+
+## Missing Values
+
+To avoid residuals larger than necessary, I decided not to attempt the replacement or reconstruction of missing values (the process by which the value of a variable instance is predicted from the other independent variables in the system, replaced with a good guess, or simply placed into a bin of unknowns). Instead, I decided to exclude rows with missing values from main training and create additional models to handle prediction for the few rows where the variables have a missing value. I know this decision will cause an abundance of models, each with its own number of independent variables, but it will prevent the model from introducing unnecessary artifacts to the system.
+
+If there are $N=7$ variables available for main training, and there are, say $mv=3$ columns with missing values, we would have:
+\begin{center}{
+${NumberOfModels} = {MainModel} + 3 {ReducedModels} = 4 {Models}$
+}\end{center}
+We can represent this system like this:
+\begin{itemize}{
+\item[] ${Survived_{main}} = f_{main}(v_1, v_2, ..., v_7)+{\varepsilon_{main}}$
+\item[] ${Surviced_1} = f_1(v_1, v_2, ..., v_6)+{\varepsilon_1}$
+\item[] ${Surviced_2} = f_2(v_1, v_2, ..., v_6)+{\varepsilon_2}$
+\item[] ${Surviced_3} = f_3(v_1, v_2, ..., v_6)+{\varepsilon_3}$
+\item[]
+\item[] ${Survived} = OneOf[{Survived_{main}},{Surviced_1},{Surviced_2},{Surviced_3}]$
+}\end{itemize}
+Where the $f_i()$ are simply dimished versions of $f_{main}()$
+
+The total count of models can end up being more or less than 4, more if there are rows missing more than one value, and less depending on which of those variables have missing values only in the training set, since a dimished model would not be needed unless it performs better than the main under validation.
+
+In any event, do not let yourself into believing tthese issues are a large cause of complication-–once the models are determined, we can automate the complete validation process and make the task simple.
+
+Because we will be adding columns to out training and testing datasets, we will call these datasets tables and files **tr_workset**, for the training set (*train_set*) and **ts_workset**, for the testing set (*test_set*), which we will save after every modification, starting now like this:
+```{r save-the-worksets, echo=TRUE}
+# For workset the training set
+tr_workset <- train_set
+f_rdsSave(tr_workset, "tr_workset.rds")
+
+# For workset the training set
+ts_workset <- test_set
+f_rdsSave(ts_workset, "ts_workset.rds")
+```
+
+In addition, we will be skipping table modifications for columns that we are not using or that were found good for use as provided.
+
+
+## Pclass
+
+We had determined in the [Pclass analysis](#analysis-pclass) section of this report that we were going to convert *Pclass* to a factor type ( [see here](#analysis-results) ). We are going to change our minds in favor of keeping things as simple as possible, because this step was not necessary. It just felt like Pclass should have been a factor.
+
+So we will leave Pclass unchanged. That is all.
+
+
+## Age
+
+This was found to be onr of the most problematic variables in the datasets. I had decided to bin the age of passengers into age groups and exclude group 0 (infants <= 1 year-old) from the training algorithms and simply set survived to 1 if an infant was found in the test set. Are there any?
+```{r number-of-infant-passengers, echo = TRUE}
+ts_infants <- ts_workset %>% filter(Age <= 1)
+ts_infants %>% dplyr::select(PassengerId, Pclass, Sex, 
+                      Age, SibSp, Parch, Embarked)
+no_ts_infants <- nrow(ts_infants)
+
+tr_infants <- tr_workset %>% filter(Age <= 1)
+tr_infants %>% dplyr::select(PassengerId, Pclass, Sex, 
+                      Age, SibSp, Parch, Embarked)
+no_tr_infants <- nrow(tr_infants)
+```
+
+There are `r no_ts_infants` infants in the training set, a bit more than half the trainind ones (`r round(no_ts_infants/no_tr_infants*100, rnd_quick)`%). In second thought, I will not do that, I will keep this group in the equations. What I might do is remove the one 80 year old in the training section because it is a suspicious entry--PassengerId=1:
+```{r retrieve-seventy-plus-age-passengers, echo = TRUE}
+tr70 <- tr_workset %>% filter(Age >69) %>%arrange(desc(Age),Pclass,Embarked)
+tr70 %>% dplyr::select(PassengerId, Pclass, Sex,
+                 Age, SibSp, Parch, Embarked)
+tr70 %>% dplyr::select(PassengerId, Name)
+```
+
+and the only condition that seems equal for all is their sex-- they are all males. Are there any of these older passengers in the test set?
+```{r seventy-plus-age-group-by-sex-report, echo = TRUE}
+
+# 70+-years-old in test set
+ts70 <- ts_workset %>% filter(Age >69) %>%
+  arrange(desc(Age),Pclass,Embarked)
+
+ts70 %>% dplyr::select(PassengerId, Pclass, Sex,
+                Age, SibSp, Parch, Embarked)
+
+# 70+-year-ols in test set
+ts70 %>% dplyr::select(PassengerId, Age, Name)
+
+# Create variables for text
+ts70_cnt <- nrow(ts70)
+ts70_age <- "NA"
+ts70_sex <- "NA"
+if ( ts70_cnt > 1 ) {
+  ts70_age <- "70+"
+  if ( ("male"%in%ts70$Sex) & ("female"%in%ts70$Sex) ) {
+    ts70_sex <- "mixed-sex"
+  } else if ( "male"%in%ts70$Sex ) {
+    ts70_sex <- "male(s)"
+  } else {
+    ts70_sex <- "female(s)"
+  }
+} else if ( ts70_cnt == 1 ) {
+  ts70_age <- ts70$Age[1]
+  ts70_sex <- ts70$Sex[1]
+}
+
+# full-join of 70+-years-olds... looking for
+# Mrs Tyrell William Cavendish (Julia Florence Siegel) SibSp
+full <- ts_workset %>% full_join(tr_workset) 
+full %>% filter("Cavendish" %in% Name)
+full %>% filter("Siegel" %in% Name)
+```
+
+There is/are `r ts70_cnt` `r ts70_age`-years-old `r ts70_sex`.
+
+Because it is a female probably travelling with a half-sibling or married sister using her husband's last name (SibSp=1 and no matches were found in either database for her married name--Cavendish, or her maiden name--Siegel.) I am inclined now not to fiddle with these age groups and let the equations solve the problem.
+
+However, we need to create the groups like this:
+```{r fare-group-creation, echo = TRUE}
+## Notice we are placing Age NA's into bin 10
+
+# For the training set
+tr_workset <- tr_workset %>%
+  mutate(age_group = 
+           as.factor(ifelse(is.na(Age), 10, ifelse(Age < 1, 0, floor(Age/10) + 1))))
+
+#And save it
+f_rdsSave(tr_workset, "tr_workset.rds")
+
+
+# For the test set
+ts_workset <- ts_workset %>%
+  mutate(age_group = 
+           as.factor(ifelse( is.na(Age), 10, ifelse(Age < 1, 0, floor(Age/10) + 1))))
+
+#And save it
+f_rdsSave(ts_workset, "ts_workset.rds")
+```
+
+We have created a new factor column called **age_group** where we have classified ages in groups of 10 years, as we observed previously in the [age analysis](#age-analysis) section. We have also placed all NA's into a 10th, unexistant group, which we can ignore by value when training the missing values diminished models.
+
+*Note that I have not been keeping track of additions to the data sets. We will run a structural and data summary at the end of this section.*
+
+
+## SibSp
+
+We had decided to convert *SibSp* to factor, but in retrospect it is really a number, so I will leave it like that.
+
+
+## Parch
+
+We will also leave *Parch* as is.
+
+
+## Fare
+
+There is so much difference in fares ranging from $0 to $500+, that I decided to bin it into %10.00 increments. However, I will like to know what kind of fares the test set passengers paid before I decide this. So let us see:
+```{r plotting-fare-without-missing-values}
+ts_workset %>% 
+  filter( !is.na(Fare) & Fare != "") %>%
+  ggplot(aes(PassengerId, Fare)) + geom_point(size=1, shape=1)
+```
+
+Yes, same range of dispersed amounts as in the train set, so let us do the binning:
+```{r plot-fare-bins}
+# Mean group value
+temp <- ts_workset %>% filter( !is.na(Fare) & Fare != "")
+mu_fare <- mean(floor(temp$Fare/10))
+
+# $10 binned groups
+ts_workset %>% mutate(fare_group=ifelse(is.na(Fare) | Fare=="", 100, floor(Fare/10))) %>%
+  group_by(fare_group) %>% ggplot( aes(fare_group, fill=Pclass)) +
+  geom_histogram(binwidth=1) + geom_vline(xintercept=mu_fare, color="darkkhaki")
+```
+
+Where the average group Fare is of $\approx$ `r round(mu_fare, rnd_quick)` (dark khaki vertical line)--excluding NA's and empty values. So yes, let us go ahead and bin the fares like this:
+```{r bin-classes-for-fare-groups, echo=TRUE}
+# -- Train set$10 binned Fare groups
+tr_workset <- tr_workset %>%
+  mutate(fare_group =
+           as.factor(ifelse(is.na(Fare), 100, floor(Fare/10))))
+
+#And save it
+f_rdsSave(tr_workset, "tr_workset.rds")
+
+# -- Test set$10 binned groups
+ts_workset <- ts_workset %>%
+  mutate(fare_group =
+           as.factor(ifelse(is.na(Fare), 100, floor(Fare/10))))
+
+#And save it
+f_rdsSave(ts_workset, "ts_workset.rds")
+```
+
+We have created a new factor column called **fare_group** where we have classified the fare in groups of $10, as we observed previously in the [fare analysis](#fare-analysis) section. We have also placed all NA's into a 100th, unexistant group, which we can ignore by value when training the missing values diminished models.
+
+
+## Embarked
+
+We are really not doing anything to this variable other than keep it present to develop an alternate model for missing values.
+
+
+## Modified Worksets
+
+```{r datasets-structural-report}
+noquote("-- TRAINING WORKSET STRUCTURE:")
+
+# For the training dataset
+str(tr_workset)
+
+noquote("-- TESTING WORKSET STRUCTURE:")
+
+# For the test dataset
+str(ts_workset)
+noquote("---------- END OF STRUCTURES -")
+```
+
+
+## Worksets Summaries
+
+```{r dataset-summary-reports}
+noquote("-- TRAIN WORKSET SUMMARY:")
+
+# For the training dataset
+train_set %>% summary()
+
+noquote("-- TEST WORKSET SUMMARY:")
+
+# For the test dataset
+test_set %>% summary()
+noquote("---------- END OF SUMMARIES -")
+```
+
+
+## Summary
+
+In short, we have created two new columns in both the training and testing sets:
+
+  - **age_group** -- Factor with 11 levels$^1$: 0="0-12 mos", 1="1-9 yrs", ..., 9="80-89 yrs", 10="NAs"
+  - **fare_group** -- Factor with 52 levels$^2$ : 0="$0-9", 1="$10-19", ..., 51="$510-519", 100="NAs"
+
+$^{(1)}$ *May show as 9-10 levels in the data structure and summary of previous sections because of missing ages in some groups ( [refer to age analysis](#age-analysis) )*
+
+$^{(2)}$ *May show as 21-22 levels in the data structure and summary of previous sections above because of missing fares in some groups ( [refer to fare analysis](#fare-analysis) )*
+
+
+\newpage
+# Models {#models}
+
+
+## Introduction
+
+So far we have analyzed all the variables in the provided data files. We have selected 7 of the 10 listed columns as predictors (**Pclass, Sex, Age, SibSp, Parch, Fare, and Embarked**.) We rejected **Name, Ticket and Cabin**. Some of the selected columns have missing values in the training set (**Age and Embarked**) and in the test set (**Age and Fare**). We added to columns to the datasets, namely **age_group** and **fare_group**. We have not checked for rows with more than one missing value, which we do here:
+```{r create-age-and-fare-groups}
+# The Cabin Column has so many empty fields
+# that we have to removed from a copy of the
+# dataset, like this:
+
+# Training set max NA or Empty
+tr        <- tr_workset
+tr$Cabin  <- NULL
+tr_mv_vec <- apply(tr, 1, function(x) sum(is.na(x) | x==""))
+tr_max    <- max( tr_mv_vec )
+tr_na_set <- tr[tr_mv_vec > 1,]
+tr_rows   <- nrow( tr_na_set )
+
+# Testing set max NA or empty
+ts        <- ts_workset
+ts$Cabin  <- NULL
+ts_mv_vec <- apply(ts, 1, function(x) sum(is.na(x) | x==""))
+ts_max    <- max( ts_mv_vec )
+ts_na_set <- ts[ts_mv_vec > 1,]
+ts_rows   <- nrow( ts_na_set )
+```
+
+Where we get that the maximum number of missing values in any one row in the training set is **`r tr_max`**, and  **`r ts_max`** in the testing set. Because there is a maximum of 1 missing value in any 1 row of the testing set, we don't need to build 5-variable models, we will need to handle *NA* Fares and *NA* Ages in the testing set, but they do not coincide in the same row, which we can also verify like this:
+```{r display-missing-value-age-fare-bins, echo=TRUE}
+# Calculation for Test set only (remember we stuck na ages in group 10, and na fares in group 100)
+head( ts %>% filter( (is.na(Age) & is.na(Fare)) | (age_group == 10 & fare_group == 100) ) )
+```
+
+Therefore, we need one model for all 7 variables (which we call the main model) and two additional 6-variable models to handle prediction in rows where either the Age or the Fare fields are missing, for a total of 3 systems of equations--not so bad after all.
+
+To make the models easier to represent, I want to label the different variables like [this]{#predictor-list}:
+
+\begin{itemize}
+  \item[] $v_1 =$ Age
+  \item[] $v_2 =$ Pclass
+  \item[] $v_3 =$ Sex
+  \item[] $v_4 =$ SibSp
+  \item[] $v_5 =$ Pclass
+  \item[] $v_6 =$ Embarked
+  \item[] $v_7 =$ Fare
+\end{itemize}
+
+
+## The Main Model
+
+The main model we explain earlier but resta here:
+
+\begin{itemize}
+  \item[] ${Survived} = f_m(v_1, v_2, ..., v_7)+\varepsilon_m$
+\end{itemize}
+where the $_m$ in $f_m$ stands for *main*, $v_i$ are the different predictors or independent variables as defined [here](#predictor-list), and $\varepsilon$, is the independent zero-centered residual explained by random variation corresponding to this model.
+
+*Later on during cross-validation we will introduce different methods to solve this system of equations. Here we are just defining the models.*
+
+
+## The Age Model
+
+The age model is designed to predict in the presence of Age missing values. All rows containg missing values in the Fare column must be ignored when training this model. The model is defined like this:
+
+\begin{itemize}
+  \item[] ${Survived} = f_a(v_2, v_3, ..., v_7)+\varepsilon_a$
+\end{itemize}
+where the $_a$ in $f_a$ stands for *age*, $v_i$ are the different predictors or independent variables as defined [here](#predictor-list) (note how the subscripts start at 2), and $\varepsilon_a$, is the independent zero-centered residual explained by random variation corresponding to this model.
+
+*Later on during cross-validation we will introduce different methods to solve this system of equations. Here we are just defining the models.*
+
+## The Fare Model
+
+The age model is designed to predict in the presence of Fare missing values. All rows containg missing values in the Age column must be ignored when training this model. The model is defined like this::
+
+\begin{itemize}
+  \item[] ${Survived} = f_f(v_1, v_2, ..., v_6)+\varepsilon_f$
+\end{itemize}
+where the $_f$ in $f_f$ stands for *fare*, $v_i$ are the different predictors or independent variables as defined [here](#predictor-list) (note how the subscripts end at 6), and $\varepsilon_f$, is the independent zero-centered residual explained by random variation corresponding to this model.
+
+*Later on during cross-validation we will introduce different methods to solve this system of equations. Here we are just defining the models.*
+
+\newpage
+# Methods
+
+In a [previous section](#surv-dependency) we identified the inputs to our system (the independent variables) later [described](#models) how we were going to use those variables to produce the desired result of predicting surviving the sinking of RMS Titanic in this fashion:
+
+\begin{itemize}
+  \item[] ${Inputs} -> f_x() -> {Output}$
+\end{itemize}
+
+We never mentioned how we were going to operate on the inputs to produce the desired result, that is, we never specified what were the $f_x()$'s above, or if we were going to test a handful of methods to chose the most suitable one, that is, the one with the smallest amount of error.
+
+This is the moment to formally introduce the methods that we will use to transform the described *inputs* (variables) into the *output* (prediction) and indicate that we will test them against each other using *cross-validation* to select the one that maximizes most the *Accuracy* of our predictions. To that purpose, we have selected the following methods:
+
+\begin{itemize}
+  \item[] 1. \textbf{knn}: classification 
+  \item[] 3. \textbf{gbm}: generalized boosted regression modeling
+  \item[] 3. \textbf{glm}: multivariate logistic
+  \item[] 4. \textbf{nn}: neural network
+  \item[] 5. \textbf{rpart}: recursive partitioning and regression trees
+\end{itemize}
+
+
+## Cross-Validation
+
+Cross validation is a technique used for assessing the performance of machine learning models. It helps in knowing how a model would generalize an independent data set to predict, and to learn how accurate the model's predictions will be in practice.
+
+During cross-validations we will be splitting the training set successively in two parts: the training part and the validation part, both of which change distinctively (in the elements they include) for every fold.
+
+To assure that every solution method receives the same partitions for cross-validations, we placed a call to *set.seed(11, sample.kind = "Rounding")*.
+
+
+
+## Validation Preprocessing
+
+In order to streamline our system and minimize computation time (there will be much passing the data sets around and partitioning during the extraction of the validation sets, we will remove all the unused columns from both the training and testing datasets like this$^*$:
+```{r remove-unused-columns, echo=TRUE}
+# For the training set
+tr_final        <- tr_workset
+tr_final$Name   <- NULL
+tr_final$Ticket <- NULL
+tr_final$Cabin  <- NULL
+
+# And Save it
+f_rdsSave(tr_final, "tr_final.rds")
+
+# For the testing set
+ts_final        <- ts_workset
+ts_final$Name   <- NULL
+ts_final$Ticket <- NULL
+ts_final$Cabin  <- NULL
+
+# And Save it
+f_rdsSave(ts_final, "ts_final.rds")
+```
+*$(^*)$We will actually not need that version of the test file until prediction time.*
+\textit{The original \textbf{Age} and \textbf{Fare} columns have been left in the final datasets for prediction. There will still be a total of 3 models, but one of 9 independent variables, instead of 7; the other two of 7, instead of 6.}
+
+In addition to that, we have to remove the rows containing missing values from the training set for training the main model, and convert the predicted column, *Survived*, to a factor so that the **accuracy** statistic is reported by the training algorithms:
+```{r prepare-model-specific-training-datasets, echo=TRUE}
+# Remove rows with empty values for training main model
+## We have to remove embarkment because it is one of the selected
+## predictors for main, butt it is not missing values in the test set
+tr_main <- tr_final %>% 
+  mutate(lived=as.factor(Survived)) %>% 
+  filter(!is.na(Age) & !is.na(Fare) & (Embarked != ""))
+noquote(paste("After removing missing value rows, the main set was left with", nrow(tr_main), "rows."))
+
+# Remove rows with empty values for Age to train age model
+# have to remove empty fare because it is used by age model
+tr_age <- tr_final %>% 
+  mutate(lived=as.factor(Survived)) %>% 
+  filter( !is.na(Fare) & (Embarked != ""))
+noquote(paste("After removing missing value rows, the age set was left with", nrow(tr_age), "rows for training."))
+
+# Remove rows with empty values for Fare to train fare model
+# have to remove empty ages because it is used by fare model
+tr_fare <- tr_final %>% 
+  mutate(lived=as.factor(Survived)) %>% 
+  filter( !is.na(Age) & (Embarked != "") )
+noquote(paste("After removing missing value rows, the fare set was left with", nrow(tr_fare), "rows for training."))
+
+# And Save them
+f_rdsSave(tr_main, "tr_main.rds")
+f_rdsSave(tr_age, "tr_age.rds")
+f_rdsSave(tr_fare, "tr_fare.rds")
+```
+*We have been saving milestone snapshots of the datasets in case we need to refer to them later without having to execute the entire set of instructions that let to their state at that time.*
+
+
+## The Main Model
+
+
+### K-Nearest Neighbors (KNN)
+
+We ran cross-validation using the KNN prediction method like this:
+```{r main-knn-validation, echo=TRUE}
+library(caret)
+
+# define training control
+t_ctrl<- trainControl(method="repeatedcv", number=10, repeats=10, savePredictions = TRUE)
+if ( R___DEBUG > 0 ) {
+  # Quicker version for debuging
+  t_ctrl<- trainControl(method="repeatedcv", number=3, repeats=1, savePredictions = TRUE)
+}
+
+# train the model 
+library(gbm)
+set.seed(11, sample.kind = "Rounding")
+Model_knn <- train(lived ~ Pclass+Sex + Age + SibSp + Parch + Fare +
+                       Embarked + age_group + fare_group, 
+                   data=tr_main, trControl = t_ctrl, method="knn")
+```
+
+
+### Generalized Boosted Regression Modeling (GBM)
+
+We ran cross-validation using the KNN prediction method like this:
+```{r main-gbm-validation, echo=TRUE}
+library(gbm)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_gbm <- train(lived ~ Pclass+Sex + Age + SibSp + Parch + Fare +
+                       Embarked + age_group + fare_group, 
+                   data=tr_main, trControl = t_ctrl, method="gbm", verbose=FALSE)
+```
+
+
+### Generalized Linear Models (GLM) Logistic
+
+We ran cross-validation using the GLM-logistic (family='binomial') prediction method like this:
+```{r main-glm-validation, echo=TRUE}
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_glm <- train(lived ~ Pclass+Sex + Age + SibSp + Parch + Fare +
+                       Embarked + age_group + fare_group, 
+                    data=tr_main, trControl=t_ctrl, 
+                    method="glm", family="binomial")
+```
+
+
+### Neural Networks (NN)
+
+We ran cross-validation using the NN prediction method like this:
+```{r main-nn-validation, echo=TRUE}
+library(MASS)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+if (R___DEBUG > 0 ) {
+  # Quicker Debug
+  Model_nn <- train(lived ~ Pclass + Sex + Age + SibSp + Parch + Fare +
+                   Embarked + age_group + fare_group,
+                  data=tr_main, trControl=t_ctrl, method = "nnet", maxit = 100, 
+                  trace=FALSE)
+} else {
+  # Slower release
+  Model_nn <- train(lived ~ Pclass + Sex + Age + SibSp + Parch + Fare +
+                      Embarked + age_group + fare_group,
+                    data=tr_main, trControl=t_ctrl, method = "nnet", maxit = 1000, 
+                    trace=FALSE)
+}
+```
+
+
+### Recursive Partitioning and Regression Trees (RPART)
+
+We ran cross-validation using the RPART prediction method like this:
+```{r main-rpart-validation, echo=TRUE}
+library(rpart)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_rpart <- train(lived ~ Pclass + Sex + Age + SibSp + Parch + Fare +
+                      Embarked + age_group + fare_group,
+                     data=tr_main, trControl=t_ctrl, method="rpart")
+```
+
+
+## The Age Model
+
+
+### K-Nearest Neighbors (KNN)
+
+We ran cross-validation using the KNN prediction method like this:
+```{r age-knn-validation, echo=TRUE}
+library(caret)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_aknn <- train(lived ~ Pclass + Sex + SibSp + Parch + Fare +
+                       Embarked + fare_group,
+                    data=tr_age, trControl=t_ctrl, method="knn")
+```
+
+
+### Generalized Boosted Regression Modeling (GBM)
+
+We ran cross-validation using the KNN prediction method like this:
+```{r age-gbm-validation, echo=TRUE}
+library(gbm)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_agbm <- train(lived ~ Pclass + Sex + SibSp + Parch + Fare +
+                       Embarked + fare_group, 
+                   data=tr_age, trControl = t_ctrl,
+                   method="gbm", verbose=FALSE)
+```
+
+
+### Generalized Linear Models (GLM) Logistic
+
+We ran cross-validation using the GLM-logistic prediction method like this:
+```{r age-glm-validation, echo=TRUE}
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_aglm <- train(lived ~ Pclass + Sex + SibSp + Parch + Fare +
+                       Embarked + fare_group, 
+                     data=tr_age, trControl=t_ctrl, 
+                     method="glm", family="binomial")
+```
+
+
+### Neural Networks (NN)
+
+We ran cross-validation using the NN prediction method like this:
+```{r age-nn-validation, echo=TRUE}
+library(MASS)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+if (R___DEBUG > 0) {
+Model_ann <- train(lived ~ Pclass + Sex + SibSp + Parch + Fare +
+                    Embarked + fare_group,
+                   data=tr_age, trControl=t_ctrl, method = "nnet", maxit = 100, 
+                   trace=FALSE)
+} else {
+  Model_ann <- train(lived ~ Pclass + Sex + SibSp + Parch + Fare +
+                       Embarked + fare_group,
+                     data=tr_age, trControl=t_ctrl, method = "nnet", maxit = 1000, 
+                     trace=FALSE)
+}
+```
+
+
+### Recursive Partitioning and Regression Trees (RPART)
+
+We ran cross-validation using the RPART prediction method like this:
+```{r  age-rpart-validation, echo=TRUE}
+library(rpart)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_arpart <- train(lived ~ Pclass + Sex + SibSp + Parch + Fare +
+                       Embarked + fare_group,
+                      data=tr_age, trControl=t_ctrl, method="rpart")
+```
+
+
+## The Fare Model
+
+
+### K-Nearest Neighbors (KNN)
+
+We ran cross-validation using the KNN prediction method like this:
+```{r  fare-knn-validation, echo=TRUE}
+library(caret)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_fknn <- train(lived ~ Pclass + Sex + SibSp + Parch + Age +
+                       Embarked + age_group, 
+                    data=tr_fare, trControl=t_ctrl, method="knn")
+```
+
+
+### Generalized Boosted Regression Modeling (GBM)
+
+We ran cross-validation using the KNN prediction method like this:
+```{r fare-gbm-validation, echo=TRUE}
+library(gbm)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_fgbm <- train(lived ~ Pclass + Sex + SibSp + Parch + Age +
+                       Embarked + age_group, 
+                   data=tr_fare, trControl = t_ctrl,
+                   method="gbm", verbose=FALSE)
+```
+
+
+### Generalized Linear Models (GLM) Logistic
+
+We ran cross-validation using the GLM-logistic prediction method like this:
+```{r fare-glm-validation, echo=TRUE}
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_fglm <- train(lived ~ Pclass + Sex + SibSp + Parch + Age +
+                       Embarked + age_group, 
+                     data=tr_fare, trControl = t_ctrl, 
+                     method="glm", family="binomial")
+```
+
+
+### Neural Networks (NN)
+
+We ran cross-validation using the NN prediction method like this:
+```{r fare-nn-validation, echo=TRUE}
+library(MASS)
+
+# seed and train the model 
+set.seed(11, sample.kind = "Rounding")
+if ( R___DEBUG > 0 ) {
+Model_fnn <- train(lived ~ Pclass + Sex + SibSp + Parch + Age +
+                    Embarked + age_group,
+                   data=tr_fare, trControl=t_ctrl, method = "nnet", maxit = 100, 
+                   trace=FALSE)
+} else {
+  Model_fnn <- train(lived ~ Pclass + Sex + SibSp + Parch + Age +
+                       Embarked + age_group,
+                     data=tr_fare, trControl=t_ctrl, method = "nnet", maxit = 1000, 
+                     trace=FALSE)
+}
+```
+
+
+### Recursive Partitioning and Regression Trees (RPART)
+
+We ran cross-validation using the RPART prediction method like this:
+```{r fare-rpart-validation, echo=TRUE}
+library(rpart)
+
+# train the model 
+set.seed(11, sample.kind = "Rounding")
+Model_frpart <- train(lived ~ Pclass + Sex + SibSp + Parch + Age +
+                       Embarked + age_group, 
+                      data=tr_fare, trControl=t_ctrl, method="rpart")
+```
+
+\newpage
+# Results {#results}
+
+In this section, we run and display the results of cross-validating our three models across their five solution methods. We have left the *caret* package function **train** handle cross-validations, by setting its train control object options *method*, *number*, and *repetitions*, to *repeatedcv* (repeated cross-validation), 10 k-folds and 10 repetitions, respectively (100 resamples.) If you are planning to run this script quickly, make sure to set the global variable R___DEBUG to *DBG_LEVEL_FST* to reduce training to three k-samples of two repetitions (6 resamples), among other time reductions, since the non-debug version will take many more minutes to complete.
+
+I could have added more methods to these models but thought the number was a good sample for the extent of this exercise.
+
+As mentioned earlier, *set.seed* is called with an identical seed before cross-validating the methods to provide the same k-samples to all. However, changing the number of k-samples and the number of repetitions to *train* may lead to different results from *knit* to *knit*, which I was able to experience from differences between the debug and release versions of this document. The debug version will also limit the number of maximum iterations (*maxit*)on the neural network methods to 100 from 1000 in the release version. So the neural network method will generalize better under the release version.
+
+
+## Main Model
+
+These are the results of cross-validating the main model methods:
+```{r main-models-resample}
+# collect resamples
+m_list <- list(KNN   = Model_knn, 
+               GBM   = Model_gbm,
+               GLM   = Model_glm,
+               NN    = Model_nn,
+               RPART = Model_rpart)
+
+# Report performances                         
+m_res <- resamples( m_list )
+
+# summarize the resample results
+#noquote("---- Summary:")
+summary(m_res)
+
+# boxplots of results
+bwplot(m_res)
+```
+\begin{center}
+\textit{The boxplot above has taken care of sorting the methods according to median accuracy. In contrast, we will be selecting the highest mean accuracy, which order can be different at times.}
+\end{center}
+
+
+## Age Model
+
+These are the results of cross-validating the age model methods:
+```{r age-models-resample}
+# collect resamples
+a_list <- list(KNN   = Model_aknn, 
+               GBM   = Model_agbm,
+               GLM   = Model_aglm, 
+               NN    = Model_ann, 
+               RPART = Model_arpart )
+
+# Report performances                
+a_res <- resamples( a_list )
+
+# summarize the resample results
+#noquote("---- Summary:")
+summary(a_res)
+
+# boxplots of results
+bwplot(a_res)
+```
+\begin{center}
+\textit{The boxplot above has taken care of sorting the methods according to median accuracy. In contrast, we will be selecting the highest mean accuracy, which order can be different at times.}
+\end{center}
+
+
+## Fare Model
+
+These are the results of cross-validating the fare model methods:
+
+```{r fare-models-resample}
+# collect resamples
+f_list <- list(KNN   = Model_fknn,  
+               GBM   = Model_fgbm,
+               GLM   = Model_fglm,
+               NN    = Model_fnn,
+               RPART = Model_frpart)
+
+# Report performances
+f_res <- resamples( f_list )
+
+# summarize the resample results
+#noquote("---- Summary:")
+summary(f_res)
+
+# boxplots of results
+bwplot(f_res)
+```
+\begin{center}
+\textit{The boxplot above has taken care of sorting the methods according to median accuracy. In contrast, we will be selecting the highest mean accuracy, which order can be different at times.}
+\end{center}
+
+
+## Predictions {#res-predictions}
+
+At this time can now solve the task to predict survival with the passenger information in the *test dataset*. We will separate the test dataset for the different models from the prepared "ts_final" set we saved earlier and filter this set according to the model's requirement. Because we devised three models, we will need to bind the rows resulting from each model's predictions to produce the final result.
+
+We can retrieve the best performing methods for our models like this:
+```{r best-methods, echo=TRUE}
+# Find best model method
+methods  <- c("KNN", "GBM", "GLM", "NN", "RPART")
+m_models <- c("Model_knn",  "Model_gbm",  "Model_glm",  "Model_nn",  "Model_rpart")
+a_models <- c("Model_aknn", "Model_agbm", "Model_aglm", "Model_ann", "Model_arpart")
+f_models <- c("Model_fknn", "Model_fgbm", "Model_fglm", "Model_fnn", "Model_frpart")
+
+# Function to retrieve best method
+f_bestMethod <- function(res) {
+
+  acc <- sapply(methods, function(m){
+    stat <- paste("res$values$\"", m, "~", "Accuracy\"", sep="")
+    return( mean(eval(parse(text=stat))) )
+  })
+  
+  df <- data.frame(Method=methods, Accuracy=acc) %>% arrange(desc(Accuracy))
+  return(df[1,])
+}
+
+m_best <- f_bestMethod(m_res)
+a_best <- f_bestMethod(a_res)
+f_best <- f_bestMethod(f_res)
+
+m_name <- m_models[which(methods == m_best$Method[1])]
+a_name <- a_models[which(methods == a_best$Method[1])]
+f_name <- f_models[which(methods == f_best$Method[1])]
+```
+
+```{r display-best-methods}
+
+# Show best methods in nice table
+sry_methods <- bind_rows(bind_rows(m_best, a_best), f_best)
+rownames(sry_methods) <- c("Main Model", "Age Model", "Fare Model")
+sry_methods %>% knitr::kable(caption="Best Performing Methods")
+```
+
+It is worth mentioning that the best performing methods for all three models can be retrieved like this:
+```{r print-best-methods, echo=TRUE}
+eval(parse(text=paste(m_name,"$finalModel",sep="")))
+eval(parse(text=paste(a_name,"$finalModel",sep="")))
+eval(parse(text=paste(f_name,"$finalModel",sep="")))
+```
+From which we can calculate the overall system accuracy for our task like this:
+\begin{itemize}
+  \item[] ${SystemAccuracy} = \frac{\sum\limits_{i}{A_{mi}} + \sum\limits_{i}{A_{ai}} + \sum\limits_{i}{A_{fi}}}{(481 * K)}$
+\end{itemize}
+Where `r nrow(test_set)` is the number of rows in the test dataset, K are the number of k-folds, $A_{mi}$ are the validation fold accuracies from the main model, $A_{ai}$, from the age model, and $A_{fi}$, from the fare model, which we calculate like this:
+
+```{r overall-accuracy, echo=TRUE}
+
+# The prediction data sets -- we need these numbers
+ts_main <- (ts_final %>% filter( !is.na(Age) & !is.na(Fare)))
+ts_age  <- (ts_final %>% filter(  is.na(Age)))
+ts_fare <- (ts_final %>% filter(  is.na(Fare)))
+
+# nrow(ts_main) pedicted with main model, 
+# nrow(ts_age) with the age model and 
+# nrow(ts_fare) with the fare model
+# such that nrow(test_set) == nrow(ts_main) + 
+# nrow(ts_age) + nrow(ts_fare)
+
+sys_accuracy <- (nrow(ts_main)*mean( eval(parse(text=paste(m_name,"$results$Accuracy",sep=""))) ) + 
+                 nrow(ts_age )*mean( eval(parse(text=paste(a_name,"$results$Accuracy",sep=""))) ) + 
+                 nrow(ts_fare)*mean( eval(parse(text=paste(f_name,"$results$Accuracy",sep=""))) )) / nrow(test_set)
+
+noquote(paste("Expected overall accuracy predicting the test dataset = ", round(sys_accuracy,rnd_detail)))
+```
+
+```{r predicting, echo = TRUE}
+# The predictions
+p_main <- as.data.frame( predict(Model_gbm,  ts_main) )
+p_age  <- as.data.frame( predict(Model_agbm, ts_age ) )
+p_fare <- as.data.frame( predict(Model_fgbm, ts_fare) )
+
+# For Main
+ts_main$Survived <- p_main[,1]
+if ( R___DEBUG > 1 )  {
+  summarize(ts_main)
+  head( ts_main %>% dplyr::select(PassengerId, Survived) )
+}
+
+# For Age
+ts_age$Survived <- p_age[,1]
+if ( R___DEBUG > 1 ) {
+  summarize(ts_age)
+  head( ts_age %>% dplyr::select(PassengerId, Survived) )
+}
+
+# For Fare
+ts_fare$Survived <- p_fare[,1]
+if ( R___DEBUG > 1 ) {
+  summarize(ts_fare)
+  head( ts_fare %>% dplyr::select(PassengerId, Survived) )
+}
+
+# Final result
+ts_res <- full_join(ts_main, ts_age) %>% 
+  full_join(ts_fare) %>% 
+  dplyr::select(PassengerId, Survived)
+
+# Nice table for first 10 predictions
+head( ts_res, n=10 ) %>% knitr::kable(caption="First 10 predictions")
+str(ts_res)
+```
+Which shows we have predicted the `r nrow(test_set)` rows in the test dataset with an expected weighted overall accuracy of $\approx$ `r  round(sys_accuracy, rnd_detail)`.
+
+
+\newpage
+# Conclusion
+
+Throughout the development of this report, we were able to examine all the information that was available on some of the passengers that were onboard the *RMS Titanic* at the time of its sinking. Many of them perished, others survived. It was our task to predict surviving and non-surviving passengers from another list on which the survival field was withheld, and which we received as the *test dataset*.
+
+During the study of this information, we discovered irregularities in the data such as missing values and hard to decipher column field meanings with multiple entries that had little bearing on survival, in the other side of the spectrum, we identified other data characteristics, such as the influence that sex and age had on the outcome.
+
+We took action to support the use of variables of great impact to the prediction system despite their shortcomings by designing models that could handle instances where the relevant variables were missing or disparate, such as it was the case with the *Age* and *Fare* columns.
+
+The models were initially proposed as black boxes that we replaced with five methods each, compatible with the *caret package* function *train*, and integrated in a way that permitted their inclusion in our prediction assessment scheme under a single interface.
+
+After testing the models' solution methods, we gained an idea, from cross-validation, of how would these methods perform on real data ( [see results](#results) from the reported accuracies), which then allowed us to select the most accurate ones and used them to predict the test dataset, which we detailed in the previous [predictions](#res-predictions) section.
+
+Perhaps the accuracy of the models we developed in this report is not enough to place this solution in Kaggle's leaderboard, but sufficient to shed a certain aura of confidence and as a mechanism to display our newly-found skills in data science.
+
+--------------------------------------------------------------
+
+\newpage
+# Miscellaneous
+
+## Notes
+
+You can execute the associated R scripts if you:
+
+  - Create a **titanic** directory under your home directory, to copy the **titanic.rmd** file provided with this distribution (you can use *knitr::purl* to generate the R scripts from the rmd file like this: *knitr::purl("titanic.rmd", output = "titanic.R", documentation = 1)*, or copy here the *titanic.R* file also included with this distribution.
+  - Create a **./data/cvs** directory under **~/titanic**, where Kaggle's **train.csv** and **test.csv** files should be copied.
+  - Remember that the distributed RMD file was used to generate the final PDF and thus had R__DEBUG set to *DBG_LEVEL_RLS*, which takes longer than 10 minutes to execute. Setting R___DEBUG to *DBG_LEVEL_FST* within this file will reduce this time to under $\approx$ 40 seconds.
+  
+Thank you!
+
+
+## System Information
+
+```{r dump-system-info}
+# Dump system information
+session_info
+```
+
+
+## Execution Time
+
+```{r print-execution-time}
+
+## Create a small function for this
+f_lapsedTime <- function(start) {
+
+	# find time difference (in seconds)
+	elapsed <- difftime(Sys.time(),start, units="secs")
+
+	# select correct units
+	t_unit <- "secs."
+	if ( elapsed >= 3600 ) {
+		elapsed <- round(elapsed/3600, 2)
+		units   <- "hours"
+	} else if ( elapsed > 60 ) {
+	  elapsed <- round(elapsed/60, 2)
+	  t_unit <- "mins."
+	} else {
+	  elapsed <- round(elapsed, 0)
+	}
+	
+	# Retun a formated string with units
+	return( paste(elapsed, t_unit) )
+}
+
+# report
+noquote( paste("Total execution time:", f_lapsedTime(start_time)) )
+
+```
+
+```{r restore-warning-level}
+# Restore warning level
+options( warn = saved_warn_level )
+```
